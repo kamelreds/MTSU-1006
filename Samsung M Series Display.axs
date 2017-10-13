@@ -1,0 +1,416 @@
+MODULE_NAME='Samsung M Series Display'(DEV VIRTUAL, DEV REAL)
+(***********************************************************)
+(*  FILE CREATED ON: 11/29/2012  AT: 15:09:28              *)
+(***********************************************************)
+(***********************************************************)
+(***********************************************************)
+(*  FILE_LAST_MODIFIED_ON: 01/30/2013  AT: 13:53:23        *)
+(***********************************************************)
+(* System Type : NetLinx                                   *)
+(***********************************************************)
+(* REV HISTORY:                                            *)
+(***********************************************************)
+(*
+
+*)    
+(***********************************************************)
+(*          DEVICE NUMBER DEFINITIONS GO BELOW             *)
+(***********************************************************)
+DEFINE_DEVICE
+#if_defined 'fakedev'
+VIRTUAL		=	33001:1:0
+Real		=	5001:1:0
+#end_if
+(***********************************************************)
+(*               CONSTANT DEFINITIONS GO BELOW             *)
+(***********************************************************)
+DEFINE_CONSTANT
+
+
+SOURCE_NUMBERS[][2]	= {'10','30','41','42'}
+SOURCE_NAMES[][20]	= {'HDMI 1','HDMI 2','Display Port','DVI','PC'}
+
+//TIMELINES
+tlPROJ_POLL		=	1			//TIMELINE TO POLL THE PROJ
+tlVOL_UP		=	2
+tlVOL_DOWN		=	3
+(***********************************************************)
+(*              DATA TYPE DEFINITIONS GO BELOW             *)
+(***********************************************************)
+DEFINE_TYPE
+
+(***********************************************************)
+(*               VARIABLE DEFINITIONS GO BELOW             *)
+(***********************************************************)
+DEFINE_VARIABLE
+
+VOLATILE INTEGER nPROJ_POWER						//DEVICE LEVEL POWER FEEDBACK FRO THE PROJ
+VOLATILE INTEGER nPROJ_LAMP						//DEVICE LEVEL LAMP HOUR FEEDBACK FOR THE PROJ
+VOLATILE INTEGER nVOLUME_LEVEL						//DEVICE LEVEL VOLUME LEVEL SCAILED 0-255
+VOLATILE INTEGER nRX_VOLUME						//RECIEVED VOLUME
+VOLATILE INTEGER nLAST_SENT_VOLUME					//TRACKS THE LAST MODIFIED VOLUME
+VOLATILE INTEGER nPROJ_CMDS_MISSED					//TRACKS THE NUMBER OF FAILED COMMANDS
+VOLATILE INTEGER bPROJ_ERROR_SET					//GOES HIGH IF THE PROJ CAUSED A STOP ERROR
+VOLATILE INTEGER nLAST_SET_INPUT					//TRACKS IF WE MADE AN INPUT ADJUSTMENT OR NOT
+VOLATILE INTEGER bVOL_STRING_GATE					//PREVENTS VOLUEM STRING LOOP BY ONLY ACCEPTING VOLUME FB WHEN ITS POLLED FOR
+
+VOLATILE INTEGER SOURCE_CHANNELS[]	= {31,32,33,34,35}
+
+//TIMELINE VARS
+VOLATILE LONG lPROJ_POLL_TIMES[] = {15000,500,500}				//15 SECONDS FOR POWER POLL THEN .5 SECONDS FOR SRC POLL
+VOLATILE LONG lRAMP_TIMES[] = {150}					//TIME LIST FOR THE VOLUME RAMP TIMELINE
+
+VOLATILE CHAR cTV_INPUTS[7][5]
+(***********************************************************)
+(*               LATCHING DEFINITIONS GO BELOW             *)
+DEFINE_LATCHING
+(***********************************************************)
+
+(***********************************************************)
+(*       MUTUALLY EXCLUSIVE DEFINITIONS GO BELOW           *)
+(***********************************************************)
+DEFINE_MUTUALLY_EXCLUSIVE
+([VIRTUAL,31]..[VIRTUAL,36])
+
+(***********************************************************)
+(*        SUBROUTINE/FUNCTION DEFINITIONS GO BELOW         *)
+(***********************************************************)
+(* EXAMPLE: DEFINE_FUNCTION <RETURN_TYPE> <NAME> (<PARAMETERS>) *)
+(* EXAMPLE: DEFINE_CALL '<NAME>' (<PARAMETERS>) *)
+DEFINE_FUNCTION CHAR fnCALCULATE_CHECKSUM(CHAR cINPUT_STRING[30])		//FUNCTION TO CALCULATE SIMPLE CHECKSUMS
+{
+    LOCAL_VAR INTEGER nSTRING_LENGTH						//STORES THE STRINGS LENGTH
+    LOCAL_VAR INTEGER nCHECKSUM							//STORES THE SUMMED CHECKSUM
+    
+    nSTRING_LENGTH = LENGTH_STRING(cINPUT_STRING)				//FIND THE LENGTH OF THE STRING
+    nCHECKSUM = 0 								//INIT nCHECKSUM JUST FOR GIGGLES
+    
+    WHILE(nSTRING_LENGTH > 0)
+    {
+	nCHECKSUM = nCHECKSUM + cINPUT_STRING[nSTRING_LENGTH]			//GETS EACH CHAR OF THE ARRAY AND SUMS THEM TOGEATHER
+	nSTRING_LENGTH--							//DECREMENTS THE STRING LENGHTH UNTIL WE HAVE SUMMED THE WHOLE THING
+    }
+    
+    nCHECKSUM = nCHECKSUM & $FF							//TRUNCATE ANYTHING OVER $FF
+    
+    RETURN TYPE_CAST(nCHECKSUM)							//RETURN THE SINGLE HEXBYTE FOR THE CHECKSUM
+}
+
+#INCLUDE 'SNAPI'
+(***********************************************************)
+(*                STARTUP CODE GOES BELOW                  *)
+(***********************************************************)
+DEFINE_START
+cTV_INPUTS[1] = "$14,$01,$01,$21"
+cTV_INPUTS[2] = "$14,$01,$01,$23"
+cTV_INPUTS[3] = "$14,$01,$01,$25"
+cTV_INPUTS[4] = "$14,$01,$01,$18"
+cTV_INPUTS[5] = "$14,$01,$01,$14"
+(***********************************************************)
+(*                THE EVENTS GO BELOW                      *)
+(***********************************************************)
+DEFINE_EVENT
+// {{NSX_DEFINE_EVENT
+// VIRTUAL DEVICE
+DATA_EVENT[VIRTUAL]
+{
+    COMMAND:
+    {
+    STACK_VAR CHAR cINPUT_BUFFER[250]							//STORES THE COMMAND FOR PROCESSING
+    STACK_VAR INTEGER nDATA_INT								//USED TO STORE THE PARCED OUT INT
+    
+    cINPUT_BUFFER = DATA.TEXT
+    
+    SELECT
+    {
+	ACTIVE(FIND_STRING(cINPUT_BUFFER,'INPUTSELECT-',1)):
+	{
+	    REMOVE_STRING(cINPUT_BUFFER,'INPUTSELECT-',1)
+	    nDATA_INT = ATOI(cINPUT_BUFFER)
+	    nLAST_SET_INPUT = nDATA_INT
+	    SEND_STRING REAL,"$AA,cTV_INPUTS[nDATA_INT],fnCALCULATE_CHECKSUM(cTV_INPUTS[nDATA_INT])"
+	    ON[VIRTUAL,SOURCE_CHANNELS[nDATA_INT]]
+	}
+    }
+  }
+}
+CHANNEL_EVENT[VIRTUAL,SOURCE_CHANNELS]
+{
+    ON:
+    {
+	SEND_STRING VIRTUAL,"'INPUT-',SOURCE_NAMES[GET_LAST(SOURCE_CHANNELS)],$0D"
+	IF(GET_LAST(SOURCE_CHANNELS) != nLAST_SET_INPUT)
+	{
+	    SEND_STRING REAL,"$AA,cTV_INPUTS[GET_LAST(SOURCE_CHANNELS)],fnCALCULATE_CHECKSUM(cTV_INPUTS[GET_LAST(SOURCE_CHANNELS)])"
+	    nLAST_SET_INPUT = GET_LAST(SOURCE_CHANNELS)
+	}
+    }
+}	
+
+// REAL DEVICE
+DATA_EVENT[REAL]
+{
+    ONLINE:
+    {
+	SEND_COMMAND DATA.DEVICE,"'SET BAUD 9600,N,8,1'"
+	TIMELINE_CREATE(tlPROJ_POLL,lPROJ_POLL_TIMES,LENGTH_ARRAY(lPROJ_POLL_TIMES),TIMELINE_RELATIVE,TIMELINE_REPEAT)	//START POLLING THE PROJ
+    }
+    STRING:
+    {
+	LOCAL_VAR CHAR cPROJ_BUFFER[250]
+	LOCAL_VAR INTEGER nPROJ_TEMP						//THROWAWAY INT USED FOR PROJ STATE CHANGE DETECTION
+	LOCAL_VAR CHAR nHEX_SUM_TEMP
+	
+	cPROJ_BUFFER = "cPROJ_BUFFER,DATA.TEXT"					//STORE THE INCOMING STRING
+	nPROJ_CMDS_MISSED = 0							//THE PROJ IS CONNECTED SO ZERO THE MISSED CMDS COUNTER
+	ON[VIRTUAL,252]								//SET THE RMS DEVICE ONLINE FLAG
+	ON[VIRTUAL,251]
+	
+	SELECT
+	{
+	    ACTIVE(FIND_STRING(cPROJ_BUFFER,"$AA,$FF,$01,$03,$41,$11,$01",1)):	//INCOMING POWER ON FB
+	    {
+		ON[VIRTUAL,255]//POWER CHANNEL
+		CLEAR_BUFFER cPROJ_BUFFER
+	    }
+	    ACTIVE(FIND_STRING(cPROJ_BUFFER,"$AA,$FF,$01,$03,$41,$11,$00",1)):	//INCOMING POWER OFF FB
+	    {
+		OFF[VIRTUAL,255]//POWER CHANNEL
+		CLEAR_BUFFER cPROJ_BUFFER
+	    }
+
+	    ACTIVE(FIND_STRING(cPROJ_BUFFER,"$AA,$FF,$01,$03,$41,$14,$21",1)):	//INCOMING HDMI 1 FB
+	    {
+		ON[VIRTUAL,SOURCE_CHANNELS[1]]
+		CLEAR_BUFFER cPROJ_BUFFER
+	    }
+	    ACTIVE(FIND_STRING(cPROJ_BUFFER,"$AA,$FF,$01,$03,$41,$14,$23",1)):	//INCOMING HDMI 2 FB
+	    {
+		ON[VIRTUAL,SOURCE_CHANNELS[2]]
+		CLEAR_BUFFER cPROJ_BUFFER
+	    }
+	    ACTIVE(FIND_STRING(cPROJ_BUFFER,"$AA,$FF,$01,$03,$41,$14,$25",1)):	//INCOMING HDMI DP FB
+	    {
+		ON[VIRTUAL,SOURCE_CHANNELS[3]]
+		CLEAR_BUFFER cPROJ_BUFFER
+	    }
+	    ACTIVE(FIND_STRING(cPROJ_BUFFER,"$AA,$FF,$01,$03,$41,$14,$18",1)):	//INCOMING HDMI DVI FB
+	    {
+		ON[VIRTUAL,SOURCE_CHANNELS[4]]
+		CLEAR_BUFFER cPROJ_BUFFER
+	    }
+	    ACTIVE(FIND_STRING(cPROJ_BUFFER,"$AA,$FF,$01,$03,$41,$14,$14",1)):	//INCOMING PC FB
+	    {
+		ON[VIRTUAL,SOURCE_CHANNELS[5]]
+		CLEAR_BUFFER cPROJ_BUFFER
+	    }
+	    ACTIVE(FIND_STRING(cPROJ_BUFFER,"$AA,$FF,$01,$03,$41,$12",1)):	//INCOMING VOLUME FB
+	    {
+		IF(bVOL_STRING_GATE == TRUE)					//ONLY ACCEPT VOL FB IF WE POLLED FOR IT
+		{
+		    nHEX_SUM_TEMP = TYPE_CAST(MID_STRING(cPROJ_BUFFER,7,1))
+		    nVOLUME_LEVEL = TYPE_CAST(2.55*nHEX_SUM_TEMP)
+		    nRX_VOLUME = nVOLUME_LEVEL
+		    SEND_LEVEL VIRTUAL,1,nVOLUME_LEVEL
+		    bVOL_STRING_GATE = FALSE
+		}
+		CLEAR_BUFFER cPROJ_BUFFER
+	    }
+	    
+	    ACTIVE(FIND_STRING(cPROJ_BUFFER,"$AA,$FF,$01,$03,$41,$13,$01",1)):	//INCOMING MUTE ON
+	    {
+		ON[VIRTUAL,199]
+		CLEAR_BUFFER cPROJ_BUFFER
+	    }
+	    ACTIVE(FIND_STRING(cPROJ_BUFFER,"$AA,$FF,$01,$03,$41,$13,$00",1)):	//INCOMING MUTE OFF
+	    {
+		OFF[VIRTUAL,199]
+		CLEAR_BUFFER cPROJ_BUFFER
+	    }
+	    
+	    ACTIVE(FIND_STRING(cPROJ_BUFFER,$0D,1)):				//IF A CR COMES IN AND NOTHIGN ELSE HAS TRIGGED CLEAR THE BUFFER
+	    {
+		CLEAR_BUFFER cPROJ_BUFFER
+	    }
+	    ACTIVE(LENGTH_STRING(cPROJ_BUFFER)>5):				//IF THE STRING GETS TOO LONG KILL IT
+	    {
+		CLEAR_BUFFER cPROJ_BUFFER
+	    }
+	}
+	CLEAR_BUFFER cPROJ_BUFFER
+    }
+}
+
+//TIMELINES
+TIMELINE_EVENT[tlPROJ_POLL]
+{
+    SWITCH(TIMELINE.SEQUENCE)
+    {
+	CASE 1:
+	{
+	    SEND_STRING REAL,"$AA,$11,$01,$00,$12"			//POLL POWER
+	    nPROJ_CMDS_MISSED++						//INCREMENTS SO THAR WE CAN TRACKS HOW MANY TIMES WE HAVE POLLED IF THE PROJ BECOMES DISCONECTED
+	    IF(nPROJ_CMDS_MISSED >7)					//PROJECTOR HAS BEEN OFFLINE FOR A WHILE
+	    {
+		bPROJ_ERROR_SET = 1					//PROJ HAS TRIGGERED A STOP ERROR
+		OFF[VIRTUAL,251]						//PROJECTOR IS IN TIME OUT... IT HAS BEEN VERY BAD
+	    }
+	}
+	CASE 2:
+	{
+	    SEND_STRING REAL,"$AA,$14,$01,$00,$15"			//POLL FOR INPUT
+	}
+	CASE 3:
+	{
+	    bVOL_STRING_GATE = TRUE					//ALLOW THE TV TO RESPOND TO THE POLL
+	    SEND_STRING REAL,"$AA,$12,$01,$00,$13"			//POLL FOR VOLUME
+	}
+    }
+}
+
+
+// VIRTUAL POWER ON CHANNELS
+CHANNEL_EVENT[VIRTUAL,27]
+CHANNEL_EVENT[VIRTUAL,28]
+{
+    ON:
+    {
+	STACK_VAR INTEGER nChIdx
+	nChIdx = CHANNEL.CHANNEL-27+1
+	SWITCH(nChIdx)
+	{
+	    CASE  1:	//POWER ON
+	    {
+		SEND_STRING REAL,"$AA,$11,$01,$01,$01,$14"
+	    }	
+	    CASE  2:	//POWER OFF
+	    {
+		SEND_STRING REAL,"$AA,$11,$01,$01,$00,$13"
+	    }
+	}
+    }
+}
+
+CHANNEL_EVENT[VIRTUAL,POWER]
+{
+    ON:
+    {
+	IF([VIRTUAL,POWER_FB])
+	{
+	    PULSE[VIRTUAL,PWR_OFF]
+	}
+	ELSE
+	{
+	    PULSE[VIRTUAL,PWR_ON]
+	}
+    }
+}
+
+//VOLUME CONTROL AND MUTE
+LEVEL_EVENT[VIRTUAL,1]							//THE USER ADJUSTABLE VOLUME LEVEL
+{
+    LOCAL_VAR CHAR cSTRING_TEMP[10]
+    
+    nVOLUME_LEVEL = LEVEL.VALUE						
+    IF(nRX_VOLUME != nVOLUME_LEVEL)					//IF THE USER HAD MODIFED THE VOLUME, WE NEED TO RESEND IF IT HAS BE CHANGED ON TEH TV THEN NO
+    {
+	cSTRING_TEMP = "$12,$01,$01,TYPE_CAST(nVOLUME_LEVEL/2.55)"
+    
+	SEND_STRING REAL,"$AA,cSTRING_TEMP,fnCALCULATE_CHECKSUM(cSTRING_TEMP)"
+    }
+}
+CHANNEL_EVENT[VIRTUAL,24]							//VOL UP
+{
+    ON:
+    {
+	IF(nVOLUME_LEVEL<245)
+	{
+	    nVOLUME_LEVEL = nVOLUME_LEVEL+10
+	    SEND_LEVEL VIRTUAL,1,nVOLUME_LEVEL
+	}
+	WAIT 10 'VOLUPDDL'
+	{
+	    TIMELINE_CREATE(tlVOL_UP,lRAMP_TIMES,LENGTH_ARRAY(lRAMP_TIMES),TIMELINE_ABSOLUTE,TIMELINE_REPEAT)
+	}
+    }
+    OFF:
+    {
+	CANCEL_WAIT 'VOLUPDDL'
+	WAIT 1 TIMELINE_KILL(tlVOL_UP)
+    }
+}
+
+TIMELINE_EVENT[tlVOL_UP]							//HOLD VOLUME UP RAMPING
+{
+	IF(nVOLUME_LEVEL<250)
+	{
+	    nVOLUME_LEVEL = nVOLUME_LEVEL+5
+	    SEND_LEVEL VIRTUAL,1,nVOLUME_LEVEL
+	}
+}
+
+CHANNEL_EVENT[VIRTUAL,25]							//VOL DOWN
+{
+    ON:
+    {
+	IF(nVOLUME_LEVEL>10)
+	{
+	    nVOLUME_LEVEL = nVOLUME_LEVEL-10
+	    SEND_LEVEL VIRTUAL,1,nVOLUME_LEVEL
+	}
+	WAIT 10 'VOLDOWNDDL'
+	{
+	    TIMELINE_CREATE(tlVOL_DOWN,lRAMP_TIMES,LENGTH_ARRAY(lRAMP_TIMES),TIMELINE_ABSOLUTE,TIMELINE_REPEAT)
+	}
+    }
+    OFF:
+    {
+	CANCEL_WAIT 'VOLDOWNDDL'
+	WAIT 1 TIMELINE_KILL(tlVOL_DOWN)
+    }
+}
+
+TIMELINE_EVENT[tlVOL_DOWN]							//HOLD VOLUME DOWN RAMPING
+{
+	IF(nVOLUME_LEVEL>5)
+	{
+	    nVOLUME_LEVEL = nVOLUME_LEVEL-5
+	    SEND_LEVEL VIRTUAL,1,nVOLUME_LEVEL
+	}
+}
+
+
+CHANNEL_EVENT[VIRTUAL,26]							//VOLUME MUTE
+{
+    ON:
+    {
+	[VIRTUAL,199] = ![VIRTUAL,199]						//TOGGLE THE MUTE
+    }
+}
+
+CHANNEL_EVENT[VIRTUAL,199]
+{
+    ON:
+    {
+	SEND_STRING REAL,"$AA,$13,$01,$01,$01,$16"	//SEND THE MUTE
+    }
+    OFF:
+    {
+	SEND_STRING REAL,"$AA,$13,$01,$01,$00,$15"	//SEND THE MUTE
+    }
+}
+//
+
+// }}NSX_DEFINE_EVENT
+
+
+
+(***********************************************************)
+(*            THE ACTUAL PROGRAM GOES BELOW                *)
+(***********************************************************)
+DEFINE_PROGRAM
+
+(***********************************************************)
+(*                     END OF PROGRAM                      *)
+(*        DO NOT PUT ANY CODE BELOW THIS COMMENT           *)
+(***********************************************************)

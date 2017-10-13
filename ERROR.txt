@@ -1,0 +1,1 @@
+Line    444 2017-10-02 (18:17:31):: Command From [41001:1:10061]-[EXCEPTION-The asset client key [22001:1:0] was not found in AssetCache. Please send CLIENT.REINIT command to force a re-registration of assets.,"COMMAND=ASSET.PARAM.UPDATE-22001:1:0,lamp2.consumption,SET_VALUE,807,true"]
